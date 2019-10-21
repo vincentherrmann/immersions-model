@@ -140,18 +140,14 @@ class ContrastivePredictiveSystem(LightningModule):
 
         # scores: data_batch, data_step, target_batch, target_step
         if self.hparams.score_over_all_timesteps:
-            noise_scoring = torch.logsumexp(scores.view(-1, batch_size, self.prediction_steps),
-                                            dim=0)  # target_batch, target_step
-            score_sum = torch.sum(scores.view(-1, batch_size, self.prediction_steps),
-                                  dim=0)
+            n_scores = scores.view(-1, batch_size, self.prediction_steps)  # data_batch*data_step, target_batch. target_step
+            noise_scoring = torch.logsumexp(n_scores, dim=0)  # target_batch, target_step
             valid_scores = torch.diagonal(scores, dim1=0, dim2=2)  # data_step, target_step, batch
             valid_scores = torch.diagonal(valid_scores, dim1=0, dim2=1)  # batch, step
         else:
-            scores = torch.diagonal(scores, dim1=1, dim2=3).permute(
-                [0, 2, 1]).contiguous()  # data_batch, step, target_batch
-            noise_scoring = torch.logsumexp(scores.view(-1, batch_size, self.prediction_steps),
-                                            dim=0)  # target_batch, target_step
-            valid_scores = torch.diagonal(scores, dim1=0, dim2=2).permute([1, 0])  # batch, step
+            scores = torch.diagonal(scores, dim1=1, dim2=3)  # data_batch, target_batch, step
+            noise_scoring = torch.logsumexp(scores, dim=0)  # target_batch, target_step
+            valid_scores = torch.diagonal(scores, dim1=0, dim2=1).permute([1, 0])  # batch, step
 
         prediction_losses = -torch.mean(valid_scores - noise_scoring, dim=1)
         loss = torch.mean(prediction_losses)
@@ -274,11 +270,25 @@ class ContrastivePredictiveSystem(LightningModule):
         val_loss_mean /= len(outputs)
         val_acc_mean /= len(outputs)
 
+        test_task_dict = {}
         if self.test_task_model is not None:
-            pass
+            self.test_task_model.calculate_data()
+
+            if not self.experiment.debug:
+                self.experiment.add_embedding(self.test_task_model.task_data, metadata=self.test_task_model.task_labels,
+                                              global_step=self.global_step)
+            if torch.cuda.is_available():
+                trainer = pl.Trainer(max_nb_epochs=20,
+                                     gpus=[0])
+            else:
+                trainer = pl.Trainer(max_nb_epochs=20)
+            trainer.fit(self.test_task_model)
+
+            test_task_dict['val_task_acc'] = trainer.tng_tqdm_dic['avg_val_accuracy']
+            test_task_dict['val_task_loss'] = trainer.tng_tqdm_dic['avg_val_loss']
 
         tqdm_dic = {'val_loss': val_loss_mean, 'val_acc': val_acc_mean}
-        return tqdm_dic
+        return {**tqdm_dic, **test_task_dict}
 
     # ---------------------
     # TRAINING SETUP

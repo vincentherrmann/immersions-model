@@ -7,19 +7,17 @@ from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
 
 import pytorch_lightning as pl
-from immersions.audio_dataset import AudioTestingDataset
+from immersions.audio_dataset import AudioTestingDataset, MaestroTestingDataset
 
 
 class ClassificationTaskModel(pl.LightningModule):
     def __init__(self, cpc_system, task_dataset_path, evaluation_ratio=0.2):
         super(ClassificationTaskModel, self).__init__()
         # not the best model...
-        self.cpc_system = cpc_system
+        self.__cpc_system = cpc_system,
+        self.task_dataset_path = task_dataset_path
+        self.audio_dataset = self._load_dataset()
 
-        self.audio_dataset = AudioTestingDataset(location=task_dataset_path,
-                                                 item_length=cpc_system.item_length,
-                                                 sampling_rate=cpc_system.hparams.sampling_rate,
-                                                 unique_length=44100*4)
         self.num_items = len(self.audio_dataset)
         self.classifier_model = torch.nn.Sequential(
             torch.nn.Linear(in_features=self.cpc_system.hparams.ar_channels[-1], out_features=32),
@@ -43,6 +41,12 @@ class ClassificationTaskModel(pl.LightningModule):
         self.validation_indices = index_list[:int(self.num_items*evaluation_ratio)]
         self.training_indices = index_list[int(self.num_items*evaluation_ratio):]
 
+    def _load_dataset(self):
+        return AudioTestingDataset(location=self.task_dataset_path,
+                                   item_length=self.cpc_system.item_length,
+                                   sampling_rate=self.cpc_system.hparams.sampling_rate,
+                                   unique_length=44100*4)
+
     def calculate_data(self):
         # calculate data for test task
         batch_size = self.cpc_system.hparams.batch_size
@@ -62,6 +66,8 @@ class ClassificationTaskModel(pl.LightningModule):
             # if self.preprocessing is not None:
             #     batch = self.preprocessing(batch)
             predictions, targets, z, c = self.cpc_system(batch)
+            c = c.view(batch.shape[0], -1, c.shape[1])
+            c = c[:, 0, :]
             # z = self.model.encoder(batch.unsqueeze(1))
             # c = self.model.autoregressive_model(z)
             task_data[step * batch_size:step*batch_size + c.shape[0], :] = c.detach().cpu()
@@ -69,9 +75,9 @@ class ClassificationTaskModel(pl.LightningModule):
 
         del t_dataloader
 
-        task_data = task_data.detach()
-        task_labels = task_labels.detach()
-        self.encoding_dataset = torch.utils.data.TensorDataset(task_data, task_labels)
+        self.task_data = task_data.detach()
+        self.task_labels = task_labels.detach()
+        self.encoding_dataset = torch.utils.data.TensorDataset(self.task_data, self.task_labels)
 
     def forward(self, x):
         return self.classifier_model(x)
@@ -108,3 +114,21 @@ class ClassificationTaskModel(pl.LightningModule):
     def val_dataloader(self):
         dataset = torch.utils.data.Subset(self.encoding_dataset, self.validation_indices)
         return torch.utils.data.DataLoader(dataset, batch_size=self.batch_size)
+
+    # def train(self, mode=True):
+    #     self.classifier_model.train(mode)
+    #
+    @property
+    def cpc_system(self):
+        return self.__cpc_system[0]
+
+
+class MaestroClassificationTaskModel(ClassificationTaskModel):
+    def _load_dataset(self):
+        return MaestroTestingDataset(location=self.task_dataset_path,
+                                     item_length=self.cpc_system.item_length,
+                                     sampling_rate=self.cpc_system.hparams.sampling_rate,
+                                     unique_length=44100*4,
+                                     mode='validation',
+                                     max_file_count=10,
+                                     shuffle_with_seed=123)

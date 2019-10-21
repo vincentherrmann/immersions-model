@@ -283,6 +283,18 @@ class MaestroDataset(AudioDataset):
         self.start_samples = start_samples
 
 
+class MaestroTestingDataset(MaestroDataset):
+    def __getitem__(self, idx):
+        if self.dummy_load:
+            sample = np.random.randn(self._item_length)
+        else:
+            file_index, position_in_file = self.get_position(idx)
+            sample = self.load_sample(file_index, position_in_file, self._item_length)
+
+        example = sample[:self._item_length], torch.LongTensor([file_index]).squeeze()
+        return example
+
+
 
 class FileBatchSampler(torch.utils.data.Sampler):
     def __init__(self, index_count_per_file, batch_size, file_batch_size=1, drop_last=True, seed=None):
