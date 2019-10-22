@@ -163,6 +163,8 @@ class ContrastivePredictiveSystem(LightningModule):
 
         batch = batch[0]
 
+        self.eval()
+
         # forward pass
         predicted_z, targets, _, _ = self.forward(batch)
         scores = torch.tensordot(predicted_z, targets, dims=([2], [1]))  # data_batch, data_step, target_batch, target_step
@@ -210,8 +212,10 @@ class ContrastivePredictiveSystem(LightningModule):
 
         # forward pass
         predicted_z, targets, _, _ = self.forward(batch)
+        # predicted_z: batch, step, features
+        # targets: batch, features, step
         scores = torch.tensordot(predicted_z, targets, dims=([2], [1]))  # data_batch, data_step, target_batch, target_step
-        loss = self.loss(scores)
+        loss = self.loss(scores)  # valid scores: batch, time_step
 
         if self.hparams.wasserstein_penalty != 0.:
             score_sum = torch.sum(scores)
@@ -224,9 +228,19 @@ class ContrastivePredictiveSystem(LightningModule):
             loss += self.hparams.wasserstein_penalty * gradient_penalty
 
         # calculate prediction accuracy as the proportion of scores that are highest for the correct target
-        max_score = torch.argmax(scores.view(self.batch_size, self.prediction_steps, -1), dim=2)  # batch, step
-        correctly_predicted = torch.eq(self.prediction_template, max_score)
-        prediction_accuracy = torch.sum(correctly_predicted, dim=0).float() / self.batch_size  # per prediction step  # self.validation_examples_per_batch
+        prediction_template = torch.arange(0, scores.shape[0], dtype=torch.long)
+        if self.hparams.score_over_all_timesteps:
+            prediction_template = torch.arange(0, scores.shape[0]*scores.shape[1], dtype=torch.long, device=scores.device)
+            prediction_template = prediction_template.view(scores.shape[0], scores.shape[1])
+            max_score = torch.argmax(scores.view(scores.shape[0], scores.shape[1], -1), dim=2)  # batch, step
+        else:
+            scores = torch.diagonal(scores, dim1=1, dim2=3)  # data_batch, target_batch, step
+            prediction_template = torch.arange(0, scores.shape[0], dtype=torch.long, device=scores.device)
+            prediction_template = prediction_template[:, None].repeat(1, self.hparams.prediction_steps)
+            max_score = torch.argmax(scores, dim=1) # batch, step
+
+        correctly_predicted = torch.eq(prediction_template, max_score)
+        prediction_accuracy = torch.sum(correctly_predicted).float() / prediction_template.numel() # per prediction step  # self.validation_examples_per_batch
 
         # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
         if self.trainer.use_dp:
@@ -271,7 +285,7 @@ class ContrastivePredictiveSystem(LightningModule):
         val_acc_mean /= len(outputs)
 
         test_task_dict = {}
-        if self.test_task_model is not None:
+        if self.test_task_model is not None and self.testing:
             self.test_task_model.calculate_data()
 
             if not self.experiment.debug:
@@ -305,7 +319,7 @@ class ContrastivePredictiveSystem(LightningModule):
         self.current_learning_rate = 0.
         return optimizer
 
-    @pl.data_loader
+    @property
     def tng_dataloader(self):
         print('tng data loader called')
         # loader = DataLoader(
@@ -313,6 +327,10 @@ class ContrastivePredictiveSystem(LightningModule):
         #     batch_sampler=self.train_sampler,
         #     num_workers=1
         # )
+        if torch.cuda.is_available():
+            torch.cuda.seed()
+        else:
+            torch.seed()
         loader = DataLoader(
             dataset=self.training_set,
             batch_size=self.batch_size,
@@ -331,11 +349,15 @@ class ContrastivePredictiveSystem(LightningModule):
         #     batch_sampler=self.validation_sampler,
         #     num_workers=1
         # )
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(12345)
+        else:
+            torch.manual_seed(12345)
         loader = DataLoader(
             dataset=self.validation_set,
             batch_size=self.batch_size,
             num_workers=4,
-            shuffle=False,
+            shuffle=True,
             pin_memory=True,
             drop_last=True
         )

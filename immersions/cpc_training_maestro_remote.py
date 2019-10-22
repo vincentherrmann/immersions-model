@@ -16,25 +16,28 @@ def main(hparams, cluster=None, results_dict=None):
     """
     # init experiment
     name = 'immersions_scalogram_resnet_maestro'
-    version = 3
+    version = 4
     hparams.log_dir = '/home/idivinci3005/experiments/logs'
-    hparams.checkpoint_dir = '/home/idivinci3005/experiments/checkpoints/' + name
+    hparams.checkpoint_dir = '/home/idivinci3005/experiments/checkpoints/' + name + '/' + str(version)
     hparams.training_set_path = '/home/idivinci3005/data/maestro-v2.0.0'
     hparams.validation_set_path = '/home/idivinci3005/data/maestro-v2.0.0'
     hparams.test_task_set_path = '/home/idivinci3005/data/maestro-v2.0.0'
     hparams.audio_noise = 3e-3
     hparams.ar_kernel_sizes = (5, 4, 1, 3, 3, 1, 3, 1, 6)
     hparams.ar_self_attention = (False, False, False, False, False, False, False, False, False)
-    hparams.batch_size = 64
+    hparams.batch_size = 32
     hparams.learning_rate = 3e-4
     hparams.warmup_steps = 1000
     hparams.annealing_steps = 100000
     hparams.score_over_all_timesteps = False
     hparams.visible_steps = 62
 
+    if not os.path.exists(hparams.checkpoint_dir):
+        os.mkdir(hparams.checkpoint_dir)
+
     exp = Experiment(
         name=name,
-        debug=False,
+        debug=True,
         save_dir=hparams.log_dir,
         version=version,
         autosave=False,
@@ -74,8 +77,9 @@ def main(hparams, cluster=None, results_dict=None):
         # distributed_backend='dp',
         gpus=[0],
         nb_sanity_val_steps=5,
-        val_check_interval=0.2,
-        val_percent_check=0.5
+        val_check_interval=0.1,
+        val_percent_check=0.25
+        #train_percent_check=0.01
     )
 
     # train model

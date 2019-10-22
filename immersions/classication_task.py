@@ -105,13 +105,15 @@ class ClassificationTaskModel(pl.LightningModule):
         # REQUIRED
         return torch.optim.Adam(self.parameters(), lr=0.001)
 
-    @pl.data_loader
+    @property
     def tng_dataloader(self):
+        print("call task training data loader")
         dataset = torch.utils.data.Subset(self.encoding_dataset, self.training_indices)
         return torch.utils.data.DataLoader(dataset, batch_size=self.batch_size)
 
-    @pl.data_loader
+    @property
     def val_dataloader(self):
+        print("call task validation data loader")
         dataset = torch.utils.data.Subset(self.encoding_dataset, self.validation_indices)
         return torch.utils.data.DataLoader(dataset, batch_size=self.batch_size)
 
