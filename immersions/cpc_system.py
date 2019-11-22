@@ -20,6 +20,7 @@ from immersions.model.predictive_coding import PredictiveCodingModel
 from immersions.model.utilities import ActivationRegister
 from immersions.audio_dataset import AudioDataset, FileBatchSampler
 from immersions.lr_schedules import *
+from immersions.input_optimization.activation_utilities import ActivationStatistics
 
 import ast
 
@@ -64,7 +65,8 @@ class ContrastivePredictiveSystem(LightningModule):
             self.activation_register = ActivationRegister()
         self.activation_register.active = False
 
-        self.preprocessing = PreprocessingModule(self.hparams)
+        with torch.no_grad():
+            self.preprocessing = PreprocessingModule(self.hparams)
         self.encoder = ScalogramResidualEncoder(self.hparams, preprocessing_module=self.preprocessing,
                                                 activation_register=self.activation_register)
         self.ar_model = ConvolutionalArModel(self.hparams, activation_register=self.activation_register)
@@ -285,11 +287,12 @@ class ContrastivePredictiveSystem(LightningModule):
         val_acc_mean /= len(outputs)
 
         test_task_dict = {}
-        if self.test_task_model is not None and self.testing:
+        if self.test_task_model is not None:
             self.test_task_model.calculate_data()
 
             if not self.experiment.debug:
-                self.experiment.add_embedding(self.test_task_model.task_data, metadata=self.test_task_model.task_labels,
+                self.experiment.add_embedding(self.test_task_model.task_data,
+                                              metadata=self.test_task_model.task_labels,
                                               global_step=self.global_step)
             if torch.cuda.is_available():
                 trainer = pl.Trainer(max_nb_epochs=20,
@@ -318,6 +321,63 @@ class ContrastivePredictiveSystem(LightningModule):
                                                  t_total=self.hparams.annealing_steps)
         self.current_learning_rate = 0.
         return optimizer
+
+    def calc_silence_statistics(self, activation_ranges, num_batches=10, device='cpu'):
+        register_was_active = self.activation_register.active
+        self.activation_register.active = True
+
+        activation_statistics = ActivationStatistics()
+        for i in range(num_batches):
+            silence_input = torch.randn(self.batch_size, 1, self.item_length) * 1e-6
+            _ = self.forward(silence_input.to(device))
+            activations = self.activation_register.get_activations()
+            for key in activations.keys():
+                activations[key] = activations[key].cpu()
+                if key in activation_ranges.keys():
+                    activation_range = activation_ranges[key]
+                    if len(activations[key].shape) == 4:
+                        activations[key] = activations[key][:, :, :, activation_range[0]:activation_range[1]]
+                    else:
+                        activations[key] = activations[key][:, :, activation_range[0]:activation_range[1]]
+            activation_statistics.add_activation_batch(activations)
+
+        t_mean, t_std, e_mean, e_std = activation_statistics.condense_statistics()
+
+        result_dict = {'total_mean': t_mean,
+                       'total_std': t_std,
+                       'element_mean': e_mean,
+                       'element_std': e_std}
+
+        return result_dict
+
+    def calc_data_statistics(self, activation_ranges, num_batches=10, device='cpu'):
+        register_was_active = self.activation_register.active
+        self.activation_register.active = True
+
+        activation_statistics = ActivationStatistics()
+        for i, batch in enumerate(self.val_dataloader):
+            if i >= num_batches:
+                break
+            _ = self.forward(batch[0].to(device))
+            activations = self.activation_register.get_activations()
+            for key in activations.keys():
+                activations[key] = activations[key].cpu()
+                if key in activation_ranges.keys():
+                    activation_range = activation_ranges[key]
+                    if len(activations[key].shape) == 4:
+                        activations[key] = activations[key][:, :, :, activation_range[0]:activation_range[1]]
+                    else:
+                        activations[key] = activations[key][:, :, activation_range[0]:activation_range[1]]
+            activation_statistics.add_activation_batch(activations)
+
+        t_mean, t_std, e_mean, e_std = activation_statistics.condense_statistics()
+
+        result_dict = {'total_mean': t_mean,
+                       'total_std': t_std,
+                       'element_mean': e_mean,
+                       'element_std': e_std}
+
+        return result_dict
 
     @property
     def tng_dataloader(self):

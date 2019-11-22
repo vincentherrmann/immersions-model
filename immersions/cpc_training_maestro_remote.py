@@ -16,7 +16,7 @@ def main(hparams, cluster=None, results_dict=None):
     """
     # init experiment
     name = 'immersions_scalogram_resnet_maestro'
-    version = 4
+    version = 0
     hparams.log_dir = '/home/idivinci3005/experiments/logs'
     hparams.checkpoint_dir = '/home/idivinci3005/experiments/checkpoints/' + name + '/' + str(version)
     hparams.training_set_path = '/home/idivinci3005/data/maestro-v2.0.0'
@@ -37,7 +37,7 @@ def main(hparams, cluster=None, results_dict=None):
 
     exp = Experiment(
         name=name,
-        debug=True,
+        debug=False,
         save_dir=hparams.log_dir,
         version=version,
         autosave=False,
@@ -50,7 +50,7 @@ def main(hparams, cluster=None, results_dict=None):
 
     # build model
     model = ContrastivePredictiveSystemMaestro(hparams)
-    task_model = MaestroClassificationTaskModel(model, task_dataset_path=hparams.validation_set_path)
+    task_model = MaestroClassificationTaskModel(model, task_dataset_path=hparams.test_task_set_path)
     model.test_task_model = task_model
 
     # callbacks
@@ -73,12 +73,12 @@ def main(hparams, cluster=None, results_dict=None):
     trainer = Trainer(
         experiment=exp,
         checkpoint_callback=checkpoint,
-        early_stop_callback=early_stop,
+        #early_stop_callback=early_stop,
         # distributed_backend='dp',
         gpus=[0],
         nb_sanity_val_steps=5,
         val_check_interval=0.1,
-        val_percent_check=0.25
+        val_percent_check=0.25,
         #train_percent_check=0.01
     )
 

@@ -188,7 +188,8 @@ class ScalogramResidualEncoder(nn.Module):
                           'residual': hparams.enc_residual,
                           'batch_norm': hparams.enc_batch_norm,
                           'batch_norm_affine': hparams.enc_batch_norm_affine,
-                          'dropout': hparams.enc_dropout}
+                          'dropout': hparams.enc_dropout,
+                          'ceil_pooling': True}
             self.blocks.append(ScalogramEncoderBlock(block_dict,
                                                      name='scalogram_block_' + str(i),
                                                      activation_register=activation_register))
