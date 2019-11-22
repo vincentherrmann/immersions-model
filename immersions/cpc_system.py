@@ -18,7 +18,10 @@ from immersions.model.scalogram_encoder import ScalogramResidualEncoder
 from immersions.model.autoregressive import ConvolutionalArModel
 from immersions.model.predictive_coding import PredictiveCodingModel
 from immersions.model.utilities import ActivationRegister
-from immersions.audio_dataset import AudioDataset, FileBatchSampler
+try:
+    from immersions.audio_dataset import AudioDataset, FileBatchSampler
+except:
+    print("cannot load audio dataset")
 from immersions.lr_schedules import *
 from immersions.input_optimization.activation_utilities import ActivationStatistics
 
