@@ -25,9 +25,12 @@ def main(hparams, cluster=None, results_dict=None):
         description='maestro dataset experiment'
     )
 
-    hparams.training_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
-    hparams.validation_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
-    hparams.test_task_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
+    #hparams.training_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
+    #hparams.validation_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
+    #hparams.test_task_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
+    hparams.training_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    hparams.validation_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    hparams.test_task_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
     hparams.audio_noise = 3e-3
     hparams.ar_kernel_sizes = (5, 4, 1, 3, 3, 1, 3, 1, 6)
     hparams.ar_self_attention = (False, False, False, False, False, False, False, False, False)

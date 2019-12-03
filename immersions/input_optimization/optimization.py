@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-import torchaudio
+#import torchaudio
 import pprint
 import os.path
 import pickle
@@ -8,12 +8,14 @@ import time
 import glob
 import numpy as np
 from collections import OrderedDict
+import librosa as lr
+import gc
 
 from matplotlib import pyplot as plt
 from immersions.model.utilities import ActivationRegister
 from immersions.cpc_system import ContrastivePredictiveSystem
 from immersions.input_optimization.activation_utilities import ModelActivations, activation_selection_dict, ActivationNormalization
-from immersions_control_app.streaming import SocketDataExchangeClient
+#from immersions_control_app.streaming import SocketDataExchangeClient
 import immersions.input_optimization.optimization_utilities as util
 
 default_control_dict = {
@@ -34,30 +36,37 @@ default_control_dict = {
 
 class Optimization:
     def __init__(self, weights_path, tags_path, model_shapes_path, ranges_path, noise_statistics_path,
-                 data_statistics_path, soundclips_path, communicator=None):
+                 data_statistics_path, soundclips_path, communicator=None,
+                 dev='cuda:0' if torch.cuda.is_available() else 'cpu'):
         self.activation_mask = None
 
-        self.dev = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        self.dev = dev
 
         self.communicator = communicator
         self.losses = [0.] * 100
+        self.step_durations = []
+        self.step_tic = time.time()
         self.load_soundclips(soundclips_path)
         self.load_statistics(noise_statistics_path, data_statistics_path)
         self.load_model(weights_path, tags_path, model_shapes_path, ranges_path)
         self.setup_optimization()
         self.control_dict = default_control_dict
         self.tic = time.time()
+        self.active = True
 
     def setup_optimization(self):
         self.optimizer = torch.optim.SGD([self.audio_input], lr=1e-3)
         #self.optimizer = torch.optim.Adam([self.audio_input], lr=1e-3)
         # self.scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer, lr_lambda=lambda s: 1.05 ** s)
-        loop_zero_point = 1. * self.activation_ranges['scalogram'][0] * self.model.preprocessing_downsampling + 1.9 * self.model.preprocessing_receptive_field
-        item_length = self.model.preprocessing_receptive_field + 63 * 4096
+        total_receptive_field = self.model.encoder.receptive_field * self.model.ar_model.downsampling_factor
+        #zero_point = self.activation_ranges['scalogram'][0] * self.model.preprocessing.downsampling_factor + self.model.preprocessing.receptive_field
+        zero_point = 155000
+
+        item_length = 800000  # self.model.item_length  #self.model.preprocessing_receptive_field + 100 * 4096
         self.jitter_loop_module = util.JitterLoop(output_length=item_length, dim=2, jitter_batches=8,
                                                   jitter_size=64000,
-                                                  zero_position=loop_zero_point,
-                                                  first_batch_offset=loop_zero_point)
+                                                  zero_position=int(zero_point),
+                                                  first_batch_offset=int(zero_point))
         #self.input_extender = df.JitterLoop(output_length=self.input_length, dim=2, jitter_size=0)
         self.time_masking = util.Masking2D(size=0, axis='width', value=torch.FloatTensor([0.]),
                                            exclude_first_batch=True)
@@ -68,14 +77,19 @@ class Optimization:
             self.mean_statistics = pickle.load(handle)['element_mean']
 
         with open(variance_statistics_path, 'rb') as handle:
-            self.std_statistics = pickle.load(handle)['element_std']
+            f = pickle.load(handle)
+            self.std_statistics = f['element_std']
 
     def load_soundclips(self, clip_directory):
         self.sr = 44100
         clip_paths = sorted(glob.glob(clip_directory + '/*.wav'))
         self.soundclip_dict = OrderedDict()
         for path in clip_paths:
-            clip = torchaudio.load(path)[0]
+            #clip = torchaudio.load(path)[0]
+            clip, _ = lr.load(path, sr=self.sr)
+            clip = torch.from_numpy(clip)
+            if len(clip.shape) == 1:
+                clip = clip[None]
             if len(clip.shape) == 2:
                 clip = clip[0:1]
             if clip.shape[1] != self.sr * 4:
@@ -91,15 +105,21 @@ class Optimization:
 
 
     def load_model(self, weights_path, tags_path, model_shapes_path, ranges_path):
-        if torch.cuda.is_available():
-            self.model = ContrastivePredictiveSystem.load_from_metrics(weights_path, tags_path, on_gpu=True)
-            self.model.cuda()
+        if self.dev != 'cpu' and torch.cuda.is_available():
+            self.model = ContrastivePredictiveSystem.load_from_metrics(weights_path, tags_path)
+            self.model.model = self.model.model.module
+            self.model.preprocessing = self.model.preprocessing.module
+            self.model.to(self.dev)
         else:
-            self.model = ContrastivePredictiveSystem.load_from_metrics(weights_path, tags_path, on_gpu=False)
+            self.model = ContrastivePredictiveSystem.load_from_metrics(weights_path, tags_path)
+            self.model.model = self.model.model.module
+            self.model.preprocessing = self.model.preprocessing.module
+            self.model.cpu()
         self.model.freeze()
         self.model.eval()
         self.register = self.model.activation_register
-        print("prediction_model weight", self.model.model.module.prediction_model.weight)
+        self.register.active = True
+        print("prediction_model weight", self.model.model.prediction_model.weight)
         pprint.pprint(self.model)
 
         self.activation_normalization = ActivationNormalization(self.mean_statistics, self.std_statistics,
@@ -114,9 +134,12 @@ class Optimization:
         self.high_freq_filter = torch.linspace(-1., 1., steps=self.model_activation.shapes['scalogram'][1])
         self.high_freq_filter = torch.clamp(self.high_freq_filter, 0., 1.)[None, :, None]
 
-        if torch.cuda.is_available():
+        if self.dev != 'cpu' and torch.cuda.is_available():
             self.activation_normalization.cuda()
             self.high_freq_filter = self.high_freq_filter.cuda()
+        else:
+            self.activation_normalization.cpu()
+            self.high_freq_filter.cpu()
 
     def input_preprocessing(self):
         self.audio_input.data += torch.rand_like(self.audio_input.data) * 1e-11
@@ -136,7 +159,7 @@ class Optimization:
 
     def get_activation_shapes(self):
         scal = self.input_preprocessing()
-        predicted_z, targets, z, c = self.model.model(scal)
+        predicted_z, targets, z, c = self.model(scal)
         registered_activations = self.register.get_activations()
 
         activation_shapes = OrderedDict()
@@ -148,10 +171,20 @@ class Optimization:
         self.receive_data()
 
         toc = time.time()
-        print("optimization step communication:", toc - self.tic)
+        #print("optimization step communication:", toc - self.tic)
         self.tic = toc
+        self.step_durations.append(toc - self.step_tic)
+        self.step_durations = self.step_durations[-10:]
+        self.step_tic = toc
 
         scal = self.input_preprocessing()
+
+        if not self.active:
+            self.scal = scal[0, 0]
+            self.scal_grad = scal[0, 0] * 0.
+            dummy_activations = torch.ones(1, self.model_activation.num_activations)
+            self.send_data(dummy_activations)
+
 
         toc = time.time()
         print("optimization step preprocessing:", toc - self.tic)
@@ -170,9 +203,10 @@ class Optimization:
         del registered_activations['prediction']
 
         for key, range in self.activation_ranges.items():
-            registered_activations[key] = registered_activations[key][:, :, :, range[0]:range[1]]
+            registered_activations[key] = registered_activations[key][..., range[0]:range[1]]
 
-        normalized_activations = self.activation_normalization(registered_activations)
+        #normalized_activations = self.activation_normalization(registered_activations)
+        normalized_activations = registered_activations
 
         flat_activations = self.flatten_activations(normalized_activations, exclude_first_dimension=True)
         # set nans to zero
@@ -234,6 +268,7 @@ class Optimization:
         self.send_data(flat_activations)
 
     def send_data(self, activations):
+        print("optimization send data")
         [scal_start, scal_end] = self.activation_ranges['scalogram']
         #input_scal = self.scal #self.preprocessing_module(self.input_extender(self.audio_input))
         #input_grad_scal = self.scal.grad #self.preprocessing_module(self.input_extender(self.audio_input.grad))
@@ -242,7 +277,8 @@ class Optimization:
         data_dict = {'activations': viz_activations,
                      'scalogram': self.scal[:, scal_start:scal_end].detach().cpu().numpy(),
                      'scalogram_grad': self.scal_grad[:, scal_start:scal_end].detach().cpu().numpy(),
-                     'losses': self.losses}
+                     'losses': self.losses,
+                     'step_durations': self.step_durations}
 
         signal_data = self.audio_input.clone().detach().squeeze().cpu().numpy()
         # if amplitude > 1.:
@@ -252,9 +288,11 @@ class Optimization:
 
         data = pickle.dumps(data_dict)
         if self.communicator is not None:
+            #print("optimization set new data")
             self.communicator.set_new_data(data)
 
     def receive_data(self):
+        #print("optimization receive data")
         if self.communicator is not None and self.communicator.new_data_available:
             self.control_dict = pickle.loads(self.communicator.get_received_data())
             self.eq_bands = self.control_dict['eq_bands']
@@ -309,6 +347,25 @@ class Optimization:
             for key, value in activation_dict.items():
                 converted_activations[key] = value.detach().cpu().contiguous().clone().type(dtype)
         return converted_activations
+
+    @staticmethod
+    def memReport():
+        num_elements = 0
+        for obj in gc.get_objects():
+            if torch.is_tensor(obj):
+                num_elements += obj.numel()
+                print(type(obj), print(obj.dtype), obj.size())
+        print("total elements in memory:", num_elements)
+
+    @staticmethod
+    def mean_activations_by_time(activations, plot=True):
+        mean_activations = {}
+        for key, value in activations.items():
+            length = value.shape[-1]
+            a = value.detach().cpu().view(-1, length).mean(dim=0)
+            mean_activations[key] = a
+            plt.plot(a)
+            plt.show()
 
 
 if __name__ == "__main__":
