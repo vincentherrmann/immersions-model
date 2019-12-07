@@ -55,30 +55,34 @@ class Optimization:
         self.active = True
 
     def setup_optimization(self):
-        self.optimizer = torch.optim.SGD([self.audio_input], lr=1e-3)
-        #self.optimizer = torch.optim.Adam([self.audio_input], lr=1e-3)
+        #self.optimizer = torch.optim.SGD([self.audio_input], lr=1e-3)
+        self.optimizer = torch.optim.Adam([self.audio_input], lr=1e-3)
         # self.scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer, lr_lambda=lambda s: 1.05 ** s)
         total_receptive_field = self.model.encoder.receptive_field * self.model.ar_model.downsampling_factor
-        #zero_point = self.activation_ranges['scalogram'][0] * self.model.preprocessing.downsampling_factor + self.model.preprocessing.receptive_field
-        zero_point = 155000
+        zero_point = self.activation_ranges['scalogram'][0] * self.model.preprocessing.downsampling_factor + self.model.preprocessing.receptive_field
+        zero_point -= 6000
+        #zero_point = 155000
 
-        item_length = 800000  # self.model.item_length  #self.model.preprocessing_receptive_field + 100 * 4096
-        self.jitter_loop_module = util.JitterLoop(output_length=item_length, dim=2, jitter_batches=8,
+        item_length = 550000  # self.model.item_length  #self.model.preprocessing_receptive_field + 100 * 4096
+        self.jitter_loop_module = util.JitterLoop(output_length=item_length, jitter_batches=8,
                                                   jitter_size=64000,
-                                                  zero_position=int(zero_point),
-                                                  first_batch_offset=int(zero_point))
+                                                  zero_position=-int(zero_point),
+                                                  first_batch_offset=-int(zero_point))
         #self.input_extender = df.JitterLoop(output_length=self.input_length, dim=2, jitter_size=0)
-        self.time_masking = util.Masking2D(size=0, axis='width', value=torch.FloatTensor([0.]),
+        self.time_masking = util.Masking2D(size=0, axis='width', value=torch.FloatTensor([0., 0.]),
                                            exclude_first_batch=True)
-        self.pitch_masking = util.Masking2D(size=0, axis='height', value=torch.FloatTensor([0.]), exclude_first_batch=True)
+        self.pitch_masking = util.Masking2D(size=0, axis='height', value=torch.FloatTensor([0., 0.]), exclude_first_batch=True)
 
     def load_statistics(self, mean_statistics_path, variance_statistics_path):
         with open(mean_statistics_path, 'rb') as handle:
-            self.mean_statistics = pickle.load(handle)['element_mean']
+            f = pickle.load(handle)
+            #self.mean_statistics = f['element_mean']
+            self.mean_statistics = f['total_mean']
 
         with open(variance_statistics_path, 'rb') as handle:
             f = pickle.load(handle)
-            self.std_statistics = f['element_std']
+            #self.std_statistics = f['element_std']
+            self.std_statistics = f['total_std']
 
     def load_soundclips(self, clip_directory):
         self.sr = 44100
@@ -102,7 +106,6 @@ class Optimization:
 
         audio_input.requires_grad = True
         self.audio_input = audio_input
-
 
     def load_model(self, weights_path, tags_path, model_shapes_path, ranges_path):
         if self.dev != 'cpu' and torch.cuda.is_available():
@@ -143,9 +146,9 @@ class Optimization:
 
     def input_preprocessing(self):
         self.audio_input.data += torch.rand_like(self.audio_input.data) * 1e-11
-        normalized_audio_input = self.audio_input
+        normalized_audio_input = self.audio_input[0]
 
-        jittered_input = self.jitter_loop_module(normalized_audio_input)
+        jittered_input = self.jitter_loop_module(normalized_audio_input)[:, None]
         scal = self.model.preprocessing(jittered_input)
         scal.retain_grad()
 
@@ -205,8 +208,8 @@ class Optimization:
         for key, range in self.activation_ranges.items():
             registered_activations[key] = registered_activations[key][..., range[0]:range[1]]
 
-        #normalized_activations = self.activation_normalization(registered_activations)
-        normalized_activations = registered_activations
+        normalized_activations = self.activation_normalization(registered_activations)
+        #normalized_activations = registered_activations
 
         flat_activations = self.flatten_activations(normalized_activations, exclude_first_dimension=True)
         # set nans to zero
@@ -214,7 +217,7 @@ class Optimization:
         flat_activations[flat_activations != flat_activations] = 0.
         selected_activations = flat_activations * self.activation_mask.unsqueeze(0)
 
-        loss = -torch.mean(torch.mean(selected_activations, dim=0)**2)
+        loss = -torch.mean(torch.mean(selected_activations, dim=0)**1)  # TODO which exponent?
 
         activation_energy_loss = torch.mean(torch.abs(flat_activations))
         activation_energy_loss *= self.control_dict['activation_loss']

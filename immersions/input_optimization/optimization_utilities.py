@@ -66,34 +66,37 @@ class Jitter(torch.nn.Module):
 
 
 class JitterLoop(torch.nn.Module):
-    def __init__(self, output_length, dim, jitter_size=None, jitter_batches=1, zero_position=0, first_batch_offset=None):
+    def __init__(self, output_length, jitter_size=None, jitter_batches=1, zero_position=0, first_batch_offset=None):
         super().__init__()
         self.output_length = output_length
-        self.dim = dim
         self.jitter_batches = jitter_batches
         self.jitter_size = jitter_size
         self.first_batch_offset = first_batch_offset
         self.zero_position = zero_position
 
     def forward(self, x):
+        # x: batch, length
+
         if x.shape[0] == 1 and self.jitter_batches > 1:
             jitter_batches = self.jitter_batches
-            x = x.repeat([self.jitter_batches] + [1] * (len(x.shape) - 1))
+            x = x.repeat([self.jitter_batches, 1])
         else:
             jitter_batches = x.shape[0]
 
+        length = x.shape[1]
+
         # repeat x as often as needed and return a section with the specified length
-        repeats = 1 + math.ceil((self.output_length + self.zero_position) / x.shape[self.dim])
-        repeat_list = [1] * len(x.shape)
-        repeat_list[self.dim] = repeats
-        rx = x.repeat(repeat_list)
+        # repeats = 1 + math.ceil((self.output_length + self.zero_position) / x.shape[self.dim])
+        # repeat_list = [1] * len(x.shape)
+        # repeat_list[self.dim] = repeats
+        # rx = x.repeat(repeat_list)
 
         if self.jitter_size is None:
             jitter_size = x.shape[self.dim]
         else:
             jitter_size = self.jitter_size
 
-        indices = torch.arange(self.output_length).unsqueeze(0).repeat(jitter_batches, 1)
+        indices = torch.arange(self.output_length)[None, :].repeat(jitter_batches, 1)
         if self.jitter_size <= 0:
             offset = torch.zeros(jitter_batches, dtype=torch.long).unsqueeze(1)
         else:
@@ -105,16 +108,23 @@ class JitterLoop(torch.nn.Module):
             offset[0] = self.first_batch_offset
 
         indices += offset
+        indices = indices % length
 
-        for ud in range(1, len(rx.shape)):
-            if ud == self.dim:
-                continue
-            r = [1] * (len(indices.shape) + 1)
-            r[ud] = rx.shape[ud]
-            indices = indices.unsqueeze(ud).repeat(r)
+        # for ud in range(1, len(rx.shape)):
+        #     if ud == self.dim:
+        #         continue
+        #     r = [1] * (len(indices.shape) + 1)
+        #     r[ud] = rx.shape[ud]
+        #     indices = indices.unsqueeze(ud).repeat(r)
 
-        indices = indices.to(rx.device)
-        new_x = torch.gather(rx, self.dim, indices)
+        indices = indices.to(x.device)
+
+        pad_length = self.output_length - length
+        if pad_length > 0:
+            x = torch.cat([x, torch.zeros(jitter_batches, pad_length).to(x.device)], dim=1)
+        else:
+            x = x[:, :self.output_length]
+        new_x = torch.gather(x, 1, indices)
         return new_x
 
 
