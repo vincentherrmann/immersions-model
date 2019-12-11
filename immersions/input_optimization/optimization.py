@@ -55,8 +55,8 @@ class Optimization:
         self.active = True
 
     def setup_optimization(self):
-        #self.optimizer = torch.optim.SGD([self.audio_input], lr=1e-3)
-        self.optimizer = torch.optim.Adam([self.audio_input], lr=1e-3)
+        self.optimizer = torch.optim.SGD([self.audio_input], lr=1e-3)
+        #self.optimizer = torch.optim.Adam([self.audio_input], lr=1e-3)
         # self.scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer, lr_lambda=lambda s: 1.05 ** s)
         total_receptive_field = self.model.encoder.receptive_field * self.model.ar_model.downsampling_factor
         zero_point = self.activation_ranges['scalogram'][0] * self.model.preprocessing.downsampling_factor + self.model.preprocessing.receptive_field
@@ -292,6 +292,7 @@ class Optimization:
         data = pickle.dumps(data_dict)
         if self.communicator is not None:
             #print("optimization set new data")
+            print("send data with size ")
             self.communicator.set_new_data(data)
 
     def receive_data(self):
