@@ -20,13 +20,10 @@ class ClassificationTaskModel(pl.LightningModule):
 
         self.num_items = len(self.audio_dataset)
         self.classifier_model = torch.nn.Sequential(
-            torch.nn.Linear(in_features=self.cpc_system.hparams.ar_channels[-1], out_features=32),
+            torch.nn.Linear(in_features=self.cpc_system.hparams.ar_channels[-1], out_features=128),
             torch.nn.ReLU(),
             torch.nn.Dropout(0.5),
-            torch.nn.Linear(in_features=32, out_features=32),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.5),
-            torch.nn.Linear(in_features=32, out_features=len(self.audio_dataset.files))
+            torch.nn.Linear(in_features=128, out_features=self.audio_dataset.num_classes)
         )
 
         if torch.cuda.is_available():

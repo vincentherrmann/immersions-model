@@ -206,6 +206,10 @@ class AudioTestingDataset(AudioDataset):
         example = sample[:self._item_length], torch.LongTensor([file_index]).squeeze()
         return example
 
+    @property
+    def num_classes(self):
+        return len(self.files)
+
 
 class MaestroDataset(AudioDataset):
     def __init__(self,
@@ -224,6 +228,7 @@ class MaestroDataset(AudioDataset):
         # modes: 'train', 'validation', 'test'
         self.location = Path(location)
         self.csv_file = self.location / 'maestro-v2.0.0.csv'
+        self.composers_file = self.location / 'composers.csv'
         self.sampling_rate = sampling_rate
         self.mono = mono
         self._item_length = item_length
@@ -250,6 +255,11 @@ class MaestroDataset(AudioDataset):
                     continue
                 self.files.append(self.location / wav_file)
                 self.files_metadata.append([composer, title, year, duration])
+
+        with open(self.composers_file) as handle:
+            reader = csv.reader(handle)
+            composers = list(reader)[0]
+            self.composer_lookup = {c: i for c, i in zip(composers, list(range(len(composers))))}
 
         if shuffle_with_seed is not None:
             random.seed(shuffle_with_seed)
@@ -291,8 +301,14 @@ class MaestroTestingDataset(MaestroDataset):
             file_index, position_in_file = self.get_position(idx)
             sample = self.load_sample(file_index, position_in_file, self._item_length)
 
-        example = sample[:self._item_length], torch.LongTensor([file_index]).squeeze()
+        composer = self.composer_lookup[self.files_metadata[file_index][0]]
+
+        example = sample[:self._item_length], torch.LongTensor([composer]).squeeze()
         return example
+
+    @property
+    def num_classes(self):
+        return len(self.composer_lookup)
 
 
 

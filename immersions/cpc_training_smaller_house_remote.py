@@ -3,7 +3,6 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning import Trainer
 from pytorch_lightning.utilities.arg_parse import add_default_args
 import os.path
-import sys
 
 from immersions.cpc_system import ContrastivePredictiveSystem
 from immersions.classication_task import ClassificationTaskModel
@@ -31,33 +30,26 @@ def main(hparams, cluster=None, results_dict=None):
     hparams.cqt_hop_length = 512
     hparams.cqt_filter_scale = 0.43
 
-    hparams.enc_channels = (1, 8, 16, 32, 64,
-                            128, 256, 512, 512)
-    hparams.enc_kernel_1_w = (3, 3, 3, 3, 3, 3, 3, 3)
+    hparams.enc_channels = (1, 8, 16, 32, 64, 128, 256, 512, 512)
+    hparams.enc_kernel_1_w = (3, 1, 3, 1, 3, 1, 3, 1)
     hparams.enc_kernel_1_h = (3, 3, 3, 3, 3, 3, 3, 3)
-    hparams.enc_kernel_2_w = (1, 3, 1, 3, 1, 3, 1, 3)
-    hparams.enc_kernel_2_h = (25, 3, 25, 3, 25, 3, 4, 3)
-    hparams.enc_padding_1 = (1, 1, 1, 1, 1, 1, 1, 1)
-    hparams.enc_padding_2 = (0, 1, 0, 1, 0, 1, 0, 0)
+    hparams.enc_kernel_2_w = (1, 1, 1, 1, 1, 1, 1, 1)
+    hparams.enc_kernel_2_h = (25, 3, 15, 3, 15, 3, 5, 3)
+    hparams.enc_padding_1 = (0, 0, 0, 0, 0, 0, 0, 0)
+    hparams.enc_padding_2 = (0, 0, 0, 0, 0, 0, 0, 0)
     hparams.enc_stride_1 = (1, 1, 1, 1, 1, 1, 1, 1)
     hparams.enc_stride_2 = (1, 1, 1, 1, 1, 1, 1, 1)
     hparams.enc_pooling_1 = (2, 1, 1, 1, 2, 1, 1, 1)
 
-    hparams.ar_kernel_sizes = (5, 4, 1, 3, 3, 1, 3, 1, 6)
+    hparams.ar_kernel_sizes = (4, 4, 1, 4, 4, 1, 4, 1, 4)
+    hparams.ar_pooling = (1, 1, 2, 1, 1, 2, 1, 1, 1)
     hparams.ar_self_attention = (False, False, False, False, False, False, False, False, False)
-    hparams.batch_size = 4
-    hparams.learning_rate = 3e-4
-    hparams.warmup_steps = 1000
-    hparams.annealing_steps = 100000
-    hparams.score_over_all_timesteps = False
-    hparams.visible_steps = 60
-
     hparams.batch_size = 32
     hparams.learning_rate = 3e-4
     hparams.warmup_steps = 1000
     hparams.annealing_steps = 100000
     hparams.score_over_all_timesteps = False
-    hparams.visible_steps = 60
+    hparams.visible_steps = 64
 
     # init experiment
     exp = Experiment(

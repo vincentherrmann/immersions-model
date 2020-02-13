@@ -215,6 +215,9 @@ class ContrastivePredictiveSystem(LightningModule):
 
         batch = batch[0]
 
+        # debug testing
+        #batch[:, :, -1] = float('inf')
+
         # forward pass
         predicted_z, targets, _, _ = self.forward(batch)
         # predicted_z: batch, step, features
@@ -470,6 +473,7 @@ class ContrastivePredictiveSystem(LightningModule):
         parser.add_argument('--score_over_all_timesteps', default=True, type=bool)
         parser.add_argument('--visible_steps', default=60, type=int)
         parser.add_argument('--prediction_steps', default=16, type=int)
+        parser.add_argument('--prediction_gap', default=8, type=int)
         parser.add_argument('--wasserstein_penalty', default=0., type=float)
         parser.add_argument('--detach_targets', default=False, type=bool)
         parser.add_argument('--file_batch_size', default=1, type=int)

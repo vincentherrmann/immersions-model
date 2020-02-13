@@ -86,9 +86,6 @@ class ScalogramEncoderBlock(nn.Module):
 
         self.main_modules.append(nn.ReLU())
 
-        self.main_modules.append(ActivationWriter(register=activation_register,
-                                                  name=self.name + '_main_conv_2'))
-
         if args_dict['dropout'] > 0.:
             self.main_modules.append(nn.Dropout(args_dict['dropout']))
 
@@ -113,7 +110,16 @@ class ScalogramEncoderBlock(nn.Module):
         self.output_activation_writer = ActivationWriter(register=activation_register,
                                                          name=self.name + '_main_conv_2')
 
+        self.downsampling_factor = args_dict["stride_1"] * args_dict["pooling_1"] * args_dict["stride_2"] * args_dict["pooling_2"]
+
     def forward(self, x):
+        l = x.shape[3]
+        b = -l % self.downsampling_factor
+        if b != 0:
+            padding = torch.zeros([x.shape[0], x.shape[1], x.shape[2], b]).to(x.device)
+            x = torch.cat([padding, x], dim=3)
+            #print("start padding:", b)
+
         original_input = x
         for m in self.main_modules:
             x = m(x)
@@ -123,21 +129,18 @@ class ScalogramEncoderBlock(nn.Module):
             x = original_input
             for m in self.residual_modules:
                 x = m(x)
-            res = x
+            res = x[:, :, :, -main.shape[3]:]
             r_h = res.shape[2]
-            r_w = res.shape[3]
             m_h = main.shape[2]
-            m_w = main.shape[3]
             o_h = (r_h - m_h + 1) / 2
-            o_w = (r_w - m_w + 1) / 2
             if int(o_h) > 0:
                 res = res[:, :, -int(o_h + m_h):-int(o_h), :]
-            if int(o_w) > 0:
-                res = res[:, :, :, -int(o_w + m_w):-int(o_w)]
             main = main + res
             if main.shape[2] == 0:
                 print("faulty shape:")
                 print(main.shape)
+
+        main = F.relu(main)
 
         self.output_activation_writer(main)
 
@@ -201,14 +204,27 @@ class ScalogramResidualEncoder(nn.Module):
 
             if self.verbose > 0:
                 print("receptive field after block", i, ":", self.receptive_field)
+        self.receptive_field = self.calc_receptive_field(hparams)
+
+    def calc_receptive_field(self, hparams):
+        n = len(hparams.enc_stride_1)
+        flatten = lambda l: [item for sublist in l for item in sublist]
+        kernel_sizes = flatten([[hparams.enc_kernel_1_w[i], hparams.enc_kernel_2_w[i]] for i in range(n)])
+        strides = flatten([[hparams.enc_stride_1[i] * hparams.enc_pooling_1[i],
+                            hparams.enc_stride_2[i] * hparams.enc_pooling_2[i]] for i in range(n)])
+        r = 1
+        s = 1
+        for l in range(n*2):
+            if l > 0:
+                s *= strides[l-1]
+            r += (kernel_sizes[l] - 1) * s
+        return r
 
     def forward(self, x):
         if len(x.shape) == 3:
             x = x.unsqueeze(2)
         for i, block in enumerate(self.blocks):
             x = block(x)
-            if i < len(self.blocks)-1:
-                x = F.relu(x)
             if self.verbose > 1:
                 print("activation shape after block", i, ":", x.shape)
         return x[:, :, 0, :]

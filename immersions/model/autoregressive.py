@@ -35,6 +35,7 @@ class ConvolutionalArBlock(nn.Module):
         super().__init__()
 
         self.name = name
+        self.downsampling_factor = stride*pooling
 
         self.main_modules = nn.ModuleList()
         if pooling > 1:
@@ -50,17 +51,14 @@ class ConvolutionalArBlock(nn.Module):
         if self_attention:
             self.main_modules.append(SelfAttention(embed_dim=out_channels, num_heads=8))
 
-        self.main_modules.append(nn.ReLU())
-
         if dropout > 0.:
             self.main_modules.append(nn.Dropout(dropout))
 
         self.residual_modules = None
-
         self.residual = residual
         if self.residual:
             self.residual_modules = nn.ModuleList()
-            if pooling*stride > 1:
+            if self.downsampling_factor > 1:
                 self.residual_modules.append(nn.MaxPool1d(pooling*stride, ceil_mode=True))
             if in_channels != out_channels:
                 self.residual_modules.append(nn.Conv1d(in_channels=in_channels,
@@ -74,6 +72,13 @@ class ConvolutionalArBlock(nn.Module):
                                                          name=self.name)
 
     def forward(self, x):
+        l = x.shape[2]
+        b = -l % self.downsampling_factor
+        if b != 0:
+            padding = torch.zeros([x.shape[0], x.shape[1], b]).to(x.device)
+            x = torch.cat([padding, x], dim=2)
+            print("start padding:", b)
+
         original_x = x
         for m in self.main_modules:
             x = m(x)
@@ -83,6 +88,8 @@ class ConvolutionalArBlock(nn.Module):
             for m in self.residual_modules:
                 x = m(x)
             main_x += x[:, :, -main_x.shape[2]:]
+
+        main_x = F.relu(main_x)
 
         self.output_activation_writer(main_x)
         return main_x

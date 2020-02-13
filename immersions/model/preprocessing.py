@@ -40,17 +40,16 @@ class PreprocessingModule(nn.Module):
 
         self.offset = 1e-9
         self.log_offset = -math.log(self.offset)
-        self.normalization_factor = 1. / self.log_offset
+        self.normalization_factor = 4. / self.log_offset
         self.pooling = hparams.scalogram_pooling
         self.downsampling_factor *= self.pooling[1]
-        self._audio_noise = hparams.audio_noise
-        self.audio_noise = self._audio_noise
+        self.audio_noise = hparams.audio_noise
         self.output = None
 
     def forward(self, x):
         # x shape:  batch, channels, samples
 
-        if self.audio_noise > 0.:
+        if self.audio_noise > 0. and self.training:
             noise = torch.randn_like(x)
             noise = F.conv1d(noise, self.filter, padding=7)
             x = x + noise*self.audio_noise
@@ -81,10 +80,3 @@ class PreprocessingModule(nn.Module):
         #    x.retain_grad()
         self.output = x
         return x
-
-    def train(self, mode=True):
-        super().train(mode)
-        if mode:
-            self.audio_noise = self._audio_noise
-        else:
-            self.audio_noise = 0.
