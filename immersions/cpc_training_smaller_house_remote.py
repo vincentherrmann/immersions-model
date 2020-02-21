@@ -3,6 +3,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning import Trainer
 from pytorch_lightning.utilities.arg_parse import add_default_args
 import os.path
+import sys
 
 from immersions.cpc_system import ContrastivePredictiveSystem
 from immersions.classication_task import ClassificationTaskModel
@@ -14,8 +15,8 @@ def main(hparams, cluster=None, results_dict=None):
     :param hparams:
     :return:
     """
-    name = 'immersions_scalogram_resnet_house_smaller'
-    version = 1
+    name = 'immersions_house_new_2'
+    version = 0
     hparams.log_dir = '/home/idivinci3005/experiments/logs'
     hparams.checkpoint_dir = '/home/idivinci3005/experiments/checkpoints/' + name + '/' + str(version)
     hparams.training_set_path = '/home/idivinci3005/data/immersions/training'
@@ -50,6 +51,8 @@ def main(hparams, cluster=None, results_dict=None):
     hparams.annealing_steps = 100000
     hparams.score_over_all_timesteps = False
     hparams.visible_steps = 64
+    hparams.prediction_steps = 16
+    hparams.prediction_gap = 4
 
     # init experiment
     exp = Experiment(
@@ -68,6 +71,7 @@ def main(hparams, cluster=None, results_dict=None):
     # build model
     model = ContrastivePredictiveSystem(hparams)
     task_model = ClassificationTaskModel(model, task_dataset_path=hparams.test_task_set_path)
+    model.test_task_model = task_model
 
     # callbacks
     early_stop = EarlyStopping(
@@ -93,9 +97,9 @@ def main(hparams, cluster=None, results_dict=None):
         #distributed_backend='dp',
         gpus=[0],
         nb_sanity_val_steps=5,
-        val_check_interval=0.2,
-        gradient_clip=0.5,
-        track_grad_norm=2
+        val_check_interval=0.2
+        #gradient_clip=0.5,
+        #track_grad_norm=2
     )
 
     # train model

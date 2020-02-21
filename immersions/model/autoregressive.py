@@ -77,7 +77,7 @@ class ConvolutionalArBlock(nn.Module):
         if b != 0:
             padding = torch.zeros([x.shape[0], x.shape[1], b]).to(x.device)
             x = torch.cat([padding, x], dim=2)
-            print("start padding:", b)
+            #print("start padding:", b)
 
         original_x = x
         for m in self.main_modules:
@@ -91,7 +91,7 @@ class ConvolutionalArBlock(nn.Module):
 
         main_x = F.relu(main_x)
 
-        self.output_activation_writer(main_x)
+        self.output_activation_writer(main_x[:, :, None, :])
         return main_x
 
 

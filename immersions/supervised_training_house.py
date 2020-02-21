@@ -5,7 +5,8 @@ from pytorch_lightning.utilities.arg_parse import add_default_args
 import os.path
 import sys
 
-from immersions.cpc_system_maestro import ContrastivePredictiveSystemMaestro
+from immersions.supervised_system import SupervisedTaskSystem
+from immersions.cpc_system import ContrastivePredictiveSystem
 from immersions.classication_task import MaestroClassificationTaskModel
 
 def main(hparams, cluster=None, results_dict=None):
@@ -17,17 +18,17 @@ def main(hparams, cluster=None, results_dict=None):
     # init experiment
     log_dir = os.path.dirname(os.path.realpath(__file__))
     exp = Experiment(
-        name='test_tube_exp',
+        name='house_supervised_0',
         debug=True,
         save_dir=log_dir,
         version=0,
         autosave=False,
-        description='maestro dataset experiment'
+        description='house supervised training'
     )
 
-    hparams.training_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
-    hparams.validation_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
-    hparams.test_task_set_path = '/Volumes/Elements/Datasets/maestro-v2.0.0'
+    hparams.training_set_path = '/home/idivinci3005/data/immersions/training'
+    hparams.validation_set_path = '/home/idivinci3005/data/immersions/validation'
+    hparams.test_task_set_path = '/home/idivinci3005/data/immersions/test_task'
     #hparams.training_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
     #hparams.validation_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
     #hparams.test_task_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
@@ -70,10 +71,7 @@ def main(hparams, cluster=None, results_dict=None):
     exp.save()
 
     # build model
-    model = ContrastivePredictiveSystemMaestro(hparams)
-    model.activation_register.active = True
-    task_model = MaestroClassificationTaskModel(model, task_dataset_path=hparams.validation_set_path)
-    model.test_task_model = task_model
+    model = SupervisedTaskSystem(hparams, dataset_path=hparams.test_task_set_path)
 
     # callbacks
     early_stop = EarlyStopping(
@@ -96,9 +94,9 @@ def main(hparams, cluster=None, results_dict=None):
     trainer = Trainer(
         experiment=exp,
         checkpoint_callback=checkpoint,
-        early_stop_callback=early_stop,
+        #early_stop_callback=early_stop,
         # distributed_backend='dp',
-        #gpus=[0],
+        gpus=[0],
         nb_sanity_val_steps=2
     )
 
@@ -113,7 +111,7 @@ if __name__ == '__main__':
     add_default_args(parent_parser, root_dir)
 
     # allow model to overwrite or extend args
-    parser = ContrastivePredictiveSystemMaestro.add_model_specific_args(parent_parser, root_dir)
+    parser = ContrastivePredictiveSystem.add_model_specific_args(parent_parser, root_dir)
     hyperparams = parser.parse_args()
 
     # train model

@@ -129,5 +129,5 @@ class MaestroClassificationTaskModel(ClassificationTaskModel):
                                      sampling_rate=self.cpc_system.hparams.sampling_rate,
                                      unique_length=44100*4,
                                      mode='validation',
-                                     max_file_count=10,
+                                     max_file_count=None, # 10,
                                      shuffle_with_seed=123)

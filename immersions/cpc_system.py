@@ -81,9 +81,8 @@ class ContrastivePredictiveSystem(LightningModule):
         self.preprocessing_downsampling = self.preprocessing.downsampling_factor
         self.preprocessing_receptive_field = self.preprocessing.receptive_field
 
-        if True: #multi_gpu:
-            self.preprocessing = torch.nn.DataParallel(self.preprocessing)
-            self.model = torch.nn.DataParallel(self.model)
+        self.preprocessing = torch.nn.DataParallel(self.preprocessing)
+        self.model = torch.nn.DataParallel(self.model)
 
         self.validation_examples_per_batch = self.batch_size
         if self.hparams.score_over_all_timesteps:
