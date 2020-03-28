@@ -6,8 +6,8 @@ import sys
 import argparse
 
 from immersions.cpc_system import convert_hparams_to_string
-from immersions.cpc_system_maestro import ContrastivePredictiveSystemMaestro
-from immersions.classication_task import MaestroClassificationTaskModel
+from immersions.cpc_system_maestro import ContrastivePredictiveSystem
+from immersions.classication_task import ClassificationTaskModel
 
 
 def get_args():
@@ -25,7 +25,7 @@ def get_args():
     parent_parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                                help='evaluate model on validation set')
 
-    parser = ContrastivePredictiveSystemMaestro.add_model_specific_args(parent_parser)
+    parser = ContrastivePredictiveSystem.add_model_specific_args(parent_parser)
     return parser.parse_args()
 
 def main(hparams, cluster=None, results_dict=None):
@@ -37,12 +37,12 @@ def main(hparams, cluster=None, results_dict=None):
     # init experiment
 
 
-    name = "immersions_maestro_4_score_timesteps"
+    name = "immersions_house_7_wasserstein_0,01"
     logs_dir = "/home/vincent/Projects/Immersions/logs"
     checkpoint_dir = "/home/vincent/Projects/Immersions/checkpoints/" + name
-    hparams.training_set_path = '/home/vincent/data/maestro-v2.0.0'
-    hparams.validation_set_path = '/home/vincent/data/maestro-v2.0.0'
-    hparams.test_task_set_path = '/home/vincent/data/maestro-v2.0.0'
+    hparams.training_set_path = '/home/vincent/data/house_data_mp3/training'
+    hparams.validation_set_path = '/home/vincent/data/house_data_mp3/validation'
+    hparams.test_task_set_path = '/home/vincent/data/house_data_mp3/test_task'
     hparams.data_path = hparams.training_set_path
     #hparams.training_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
     #hparams.validation_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
@@ -74,34 +74,35 @@ def main(hparams, cluster=None, results_dict=None):
     hparams.learning_rate = 3e-4
     hparams.warmup_steps = 1000
     hparams.annealing_steps = 100000
-    hparams.score_over_all_timesteps = True
+    hparams.score_over_all_timesteps = False
+    hparams.wasserstein_penalty = 0.01
     hparams.visible_steps = 64
     hparams.prediction_steps = 16
     hparams.prediction_gap = 4
 
     # build model
-    model = ContrastivePredictiveSystemMaestro(hparams)
+    model = ContrastivePredictiveSystem(hparams)
     model.activation_register.active = False
 
     def create_task_model():
-        task_model = MaestroClassificationTaskModel(cpc_system=model,
-                                                    task_dataset_path=hparams.validation_set_path,
-                                                    feature_size=model.ar_model.ar_size,
-                                                    hidden_layers=0)
+        task_model = ClassificationTaskModel(cpc_system=model,
+                                             task_dataset_path=hparams.validation_set_path,
+                                             feature_size=model.ar_model.ar_size,
+                                             hidden_layers=0)
         return task_model
 
     model.get_test_task_model = create_task_model
 
     logger = TensorBoardLogger(save_dir=logs_dir, name=name)
     checkpoint_callback = ModelCheckpoint(filepath=checkpoint_dir, save_top_k=-1)
-
     # configure trainer
     trainer = Trainer(gpus=1,
                       train_percent_check=1.,
-                      val_percent_check=0.5,
-                      val_check_interval=0.25,
+                      val_percent_check=1.,
+                      val_check_interval=0.5,
                       logger=logger,
                       checkpoint_callback=checkpoint_callback,
+                      fast_dev_run=False,
                       early_stop_callback=False)
 
     # train model

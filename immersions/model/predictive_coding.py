@@ -82,7 +82,7 @@ class PredictiveCodingModel(nn.Module):
         predicted_z = self.prediction_model(c)  # batch, step*enc_size
         predicted_z = predicted_z.view(-1, self.prediction_steps, self.enc_size)  # batch, step, enc_size
 
-        predicted_z = self.prediction_activation_writer(predicted_z[:, :, None, :])
+        self.prediction_activation_writer(predicted_z[:, :, None, :])
 
         if self.viz_mode:
             targets = torch.zeros_like(predicted_z)

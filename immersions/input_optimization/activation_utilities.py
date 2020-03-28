@@ -39,6 +39,9 @@ class ModelActivations:
         self.floored_time_step_lookup = None
 
     def select_activations(self, sel=activation_selection_dict):
+        if sel is None:
+            return
+
         if not sel['keep_selection']:
             self.focus = np.zeros(self.num_activations, dtype=np.bool)
 

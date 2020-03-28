@@ -1,23 +1,20 @@
 from unittest import TestCase
 from immersions.input_optimization.optimization import Optimization
-
+from immersions_control_app.settings_dicts import maestro_new
 
 class TestOptimization(TestCase):
     def test_loading(self):
-        weights_path = '/Volumes/Elements/Projekte/Immersions/checkpoints/immersions_scalogram_resnet/_ckpt_epoch_20.ckpt'
-        tags_path = '/Volumes/Elements/Projekte/Immersions/logs/immersions_scalogram_resnet/version_7/meta_tags.csv'
-        model_shapes_path = '/Users/vincentherrmann/Documents/Projekte/Immersions/models/immersions_scalogram_resnet_layout_2/immersions_scalogram_resnet_activation_shapes.p'
-        ranges_path = '/Users/vincentherrmann/Documents/Projekte/Immersions/models/immersions_scalogram_resnet_layout_2/immersions_scalogram_resnet_ranges.p'
-        noise_statistics_path = '/Users/vincentherrmann/Documents/Projekte/Immersions/models/immersions_scalogram_resnet_layout_2/immersions_scalogram_resnet_silence_statistics.p'
-        data_statistics_path = '/Users/vincentherrmann/Documents/Projekte/Immersions/models/immersions_scalogram_resnet_layout_2/immersions_scalogram_resnet_data_statistics.p'
-        soundclips_path = '/Users/vincentherrmann/Documents/Projekte/Immersions/soundclips_44khz'
+        settings = maestro_new
 
-        optimization = Optimization(weights_path=weights_path,
-                                    tags_path=tags_path,
-                                    model_shapes_path=model_shapes_path,
-                                    ranges_path=ranges_path,
-                                    noise_statistics_path=noise_statistics_path,
-                                    data_statistics_path=data_statistics_path,
-                                    soundclips_path=soundclips_path)
-        optimization.step()
+        optimization = Optimization(weights_path=settings["weights_path"],
+                                    tags_path=settings["tags_path"],
+                                    model_shapes_path=settings["activations_shapes_path"],
+                                    ranges_path=settings["ranges_path"],
+                                    noise_statistics_path=settings["noise_statistics_path"],
+                                    data_statistics_path=settings["data_statistics_path"],
+                                    soundclips_path=settings["soundclips_path"],
+                                    dev='cuda:0')
+
+        for i in range(5):
+            optimization.step()
         pass

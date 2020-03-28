@@ -14,6 +14,7 @@ import gc
 from matplotlib import pyplot as plt
 from immersions.model.utilities import ActivationRegister
 from immersions.cpc_system import ContrastivePredictiveSystem
+from immersions.cpc_system_maestro import ContrastivePredictiveSystemMaestro
 from immersions.input_optimization.activation_utilities import ModelActivations, activation_selection_dict, ActivationNormalization
 #from immersions_control_app.streaming import SocketDataExchangeClient
 import immersions.input_optimization.optimization_utilities as util
@@ -22,7 +23,7 @@ default_control_dict = {
             'lr': 1e-4,
             'selected_clip': 'silence',
             'mix_original': 0.,
-            'batch_size': 1,
+            'batch_size': 8,
             'time_jitter': 0.,
             'time_masking': 0.,
             'pitch_masking': 0.,
@@ -59,9 +60,9 @@ class Optimization:
         #self.optimizer = torch.optim.Adam([self.audio_input], lr=1e-3)
         # self.scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer=self.optimizer, lr_lambda=lambda s: 1.05 ** s)
         total_receptive_field = self.model.encoder.receptive_field * self.model.ar_model.downsampling_factor
-        zero_point = self.activation_ranges['scalogram'][0] * self.model.preprocessing.downsampling_factor + self.model.preprocessing.receptive_field
-        zero_point -= 6000
-        #zero_point = 155000
+        #zero_point = self.activation_ranges['scalogram'][0] * self.model.preprocessing.downsampling_factor + self.model.preprocessing.receptive_field
+        #zero_point -= 6000
+        zero_point = 8000
 
         item_length = 550000  # self.model.item_length  #self.model.preprocessing_receptive_field + 100 * 4096
         self.jitter_loop_module = util.JitterLoop(output_length=item_length, jitter_batches=8,
@@ -108,21 +109,32 @@ class Optimization:
         self.audio_input = audio_input
 
     def load_model(self, weights_path, tags_path, model_shapes_path, ranges_path):
-        if self.dev != 'cpu' and torch.cuda.is_available():
-            self.model = ContrastivePredictiveSystem.load_from_metrics(weights_path, tags_path)
-            self.model.model = self.model.model.module
-            self.model.preprocessing = self.model.preprocessing.module
-            self.model.to(self.dev)
+        if "maestro" in weights_path:
+            system = ContrastivePredictiveSystemMaestro
         else:
-            self.model = ContrastivePredictiveSystem.load_from_metrics(weights_path, tags_path)
-            self.model.model = self.model.model.module
-            self.model.preprocessing = self.model.preprocessing.module
-            self.model.cpu()
-        self.model.freeze()
-        self.model.eval()
+            system = ContrastivePredictiveSystem
+        if tags_path is None:
+            model = system.load_from_checkpoint(weights_path)
+        else:
+            model = system.load_from_metrics(weights_path, tags_csv=tags_path)
+
+        if self.dev != 'cpu' and torch.cuda.is_available():
+            model.cuda()
+            model.on_gpu = True
+        model.freeze()
+        model.eval()
+        model.activation_register.active = True
+        model.model.module.viz_mode = True
+        self.model = model
+
+        # remove DataParallel
+        self.model.model = self.model.model.module
+        self.model.model.activation_register.devices = None
+        self.model.model.activation_register.activations = OrderedDict()
+
         self.register = self.model.activation_register
         self.register.active = True
-        print("prediction_model weight", self.model.model.prediction_model.weight)
+
         pprint.pprint(self.model)
 
         self.activation_normalization = ActivationNormalization(self.mean_statistics, self.std_statistics,
@@ -206,7 +218,7 @@ class Optimization:
         del registered_activations['prediction']
 
         for key, range in self.activation_ranges.items():
-            registered_activations[key] = registered_activations[key][..., range[0]:range[1]]
+            registered_activations[key] = registered_activations[key][..., -range:]
 
         normalized_activations = self.activation_normalization(registered_activations)
         #normalized_activations = registered_activations
@@ -217,7 +229,7 @@ class Optimization:
         flat_activations[flat_activations != flat_activations] = 0.
         selected_activations = flat_activations * self.activation_mask.unsqueeze(0)
 
-        loss = -torch.mean(torch.mean(selected_activations, dim=0)**1)  # TODO which exponent?
+        loss = -torch.mean(torch.mean(selected_activations, dim=0)**2)  # TODO which exponent?
 
         activation_energy_loss = torch.mean(torch.abs(flat_activations))
         activation_energy_loss *= self.control_dict['activation_loss']
@@ -272,14 +284,14 @@ class Optimization:
 
     def send_data(self, activations):
         print("optimization send data")
-        [scal_start, scal_end] = self.activation_ranges['scalogram']
+        scal_range = self.activation_ranges['scalogram']
         #input_scal = self.scal #self.preprocessing_module(self.input_extender(self.audio_input))
         #input_grad_scal = self.scal.grad #self.preprocessing_module(self.input_extender(self.audio_input.grad))
         viz_activations = activations[0].detach().cpu().type(torch.float16)
 
         data_dict = {'activations': viz_activations,
-                     'scalogram': self.scal[:, scal_start:scal_end].detach().cpu().numpy(),
-                     'scalogram_grad': self.scal_grad[:, scal_start:scal_end].detach().cpu().numpy(),
+                     'scalogram': self.scal[:, -scal_range:].detach().cpu().numpy(),
+                     'scalogram_grad': self.scal_grad[:, -scal_range:].detach().cpu().numpy(),
                      'losses': self.losses,
                      'step_durations': self.step_durations}
 

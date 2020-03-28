@@ -3,8 +3,7 @@ import torch
 import random
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
-from torchvision.datasets import MNIST
-import torchvision.transforms as transforms
+from _collections import OrderedDict
 
 import pytorch_lightning as pl
 from immersions.audio_dataset import AudioTestingDataset, MaestroTestingDataset
@@ -95,10 +94,16 @@ class SupervisedTaskSystem(pl.LightningModule):
         # self.example_input_array = torch.zeros(1, 1, self.model.item_length)
 
     def _load_dataset(self):
-        self.dataset = AudioTestingDataset(location=self.task_dataset_path,
-                                   item_length=44100*8,
-                                   sampling_rate=self.hparams.sampling_rate,
-                                   unique_length=44100*4)
+        if "maestro" in self.task_dataset_path:
+            self.dataset = MaestroTestingDataset(location=self.task_dataset_path,
+                                                 item_length=44100 * 8,
+                                                 sampling_rate=self.hparams.sampling_rate,
+                                                 unique_length=44100 * 4)
+        else:
+            self.dataset = AudioTestingDataset(location=self.task_dataset_path,
+                                               item_length=44100*8,
+                                               sampling_rate=self.hparams.sampling_rate,
+                                               unique_length=44100*4)
 
     def forward(self, x):
         scal = self.preprocessing(x[:, None, :])
@@ -109,7 +114,15 @@ class SupervisedTaskSystem(pl.LightningModule):
         # REQUIRED
         x, y = batch
         y_hat = self.forward(x)
-        return {'loss': F.cross_entropy(y_hat, y)}
+        loss = F.cross_entropy(y_hat, y)
+
+        output = OrderedDict({
+            'loss': loss,
+            'progress_bar': {'train_loss': loss},
+            'log': {'tng_loss': loss}
+        })
+
+        return output
 
     def validation_step(self, batch, batch_nb):
         # OPTIONAL
@@ -122,19 +135,26 @@ class SupervisedTaskSystem(pl.LightningModule):
         # OPTIONAL
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         avg_acc = torch.stack([x['val_accuracy'] for x in outputs]).mean()
-        return {'val_loss': avg_loss, 'val_acc': avg_acc}
+
+        result = {
+            "log": {"val_loss": avg_loss,
+                    "val_acc": avg_acc},
+            "val_loss": avg_loss
+        }
+        return result
+
+        return output
 
     def configure_optimizers(self):
         # REQUIRED
-        return torch.optim.Adam(self.parameters(), lr=0.0001)
+        return torch.optim.SGD(self.parameters(), lr=self.hparams.learning_rate)
 
-    @property
-    def tng_dataloader(self):
+    def train_dataloader(self):
         print("call task training data loader")
         dataset = torch.utils.data.Subset(self.dataset, self.training_indices)
         return torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
-    @property
+    @pl.data_loader
     def val_dataloader(self):
         print("call task validation data loader")
         dataset = torch.utils.data.Subset(self.dataset, self.validation_indices)

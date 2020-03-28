@@ -1,13 +1,33 @@
 from test_tube import HyperOptArgumentParser, Experiment
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning import Trainer
-from pytorch_lightning.utilities.arg_parse import add_default_args
+from pytorch_lightning.logging import TensorBoardLogger
 import os.path
 import sys
+import argparse
 
 from immersions.supervised_system import SupervisedTaskSystem
 from immersions.cpc_system import ContrastivePredictiveSystem
 from immersions.classication_task import MaestroClassificationTaskModel
+from immersions.cpc_system import convert_hparams_to_string
+
+def get_args():
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument('--data-path', metavar='DIR', type=str,
+                               help='path to dataset')
+    parent_parser.add_argument('--save-path', metavar='DIR', default=".", type=str,
+                               help='path to save output')
+    parent_parser.add_argument('--gpus', type=int, default=1,
+                               help='how many gpus')
+    parent_parser.add_argument('--distributed-backend', type=str, default='dp', choices=('dp', 'ddp', 'ddp2'),
+                               help='supports three options dp, ddp, ddp2')
+    parent_parser.add_argument('--use-16bit', dest='use_16bit', action='store_true',
+                               help='if true uses 16 bit precision')
+    parent_parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
+                               help='evaluate model on validation set')
+
+    parser = ContrastivePredictiveSystem.add_model_specific_args(parent_parser)
+    return parser.parse_args()
 
 def main(hparams, cluster=None, results_dict=None):
     """
@@ -16,22 +36,17 @@ def main(hparams, cluster=None, results_dict=None):
     :return:
     """
     # init experiment
-    log_dir = os.path.dirname(os.path.realpath(__file__))
-    exp = Experiment(
-        name='house_supervised_0',
-        debug=True,
-        save_dir=log_dir,
-        version=0,
-        autosave=False,
-        description='house supervised training'
-    )
 
-    hparams.training_set_path = '/home/idivinci3005/data/immersions/training'
-    hparams.validation_set_path = '/home/idivinci3005/data/immersions/validation'
-    hparams.test_task_set_path = '/home/idivinci3005/data/immersions/test_task'
-    #hparams.training_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
-    #hparams.validation_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
-    #hparams.test_task_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    name = "house_supervised_1"
+    logs_dir = "/home/vincent/Projects/Immersions/logs"
+    checkpoint_dir = "/home/vincent/Projects/Immersions/checkpoints/" + name
+    hparams.training_set_path = '/home/vincent/data/house_data_mp3/training'
+    hparams.validation_set_path = '/home/vincent/data/house_data_mp3/validation'
+    hparams.test_task_set_path = '/home/vincent/data/house_data_mp3/test_task'
+    hparams.data_path = hparams.training_set_path
+    # hparams.training_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    # hparams.validation_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    # hparams.test_task_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
     hparams.dummy_datasets = False
     hparams.audio_noise = 3e-3
 
@@ -55,64 +70,41 @@ def main(hparams, cluster=None, results_dict=None):
     hparams.ar_kernel_sizes = (4, 4, 1, 4, 4, 1, 4, 1, 4)
     hparams.ar_pooling = (1, 1, 2, 1, 1, 2, 1, 1, 1)
     hparams.ar_self_attention = (False, False, False, False, False, False, False, False, False)
-    hparams.batch_size = 4
+    hparams.batch_size = 32
     hparams.learning_rate = 3e-4
     hparams.warmup_steps = 1000
     hparams.annealing_steps = 100000
     hparams.score_over_all_timesteps = False
+    hparams.wasserstein_penalty = 0.00
     hparams.visible_steps = 64
+    hparams.prediction_steps = 16
+    hparams.prediction_gap = 4
 
     # debug testing
     hparams.enc_batch_norm = False
     hparams.ar_batch_norm = False
 
-    # set the hparams for the experiment
-    exp.argparse(hparams)
-    exp.save()
-
     # build model
     model = SupervisedTaskSystem(hparams, dataset_path=hparams.test_task_set_path)
 
-    # callbacks
-    early_stop = EarlyStopping(
-        monitor=hparams.early_stop_metric,
-        patience=hparams.early_stop_patience,
-        verbose=True,
-        mode=hparams.early_stop_mode
-    )
-
-    model_save_path = '{}/{}/{}'.format(hparams.model_save_path, exp.name, exp.version)
-    checkpoint = ModelCheckpoint(
-        filepath=model_save_path,
-        save_best_only=True,
-        verbose=True,
-        monitor=hparams.model_save_monitor_value,
-        mode=hparams.model_save_monitor_mode
-    )
-
+    logger = TensorBoardLogger(save_dir=logs_dir, name=name)
+    checkpoint_callback = ModelCheckpoint(filepath=checkpoint_dir, save_top_k=1)
     # configure trainer
-    trainer = Trainer(
-        experiment=exp,
-        checkpoint_callback=checkpoint,
-        #early_stop_callback=early_stop,
-        # distributed_backend='dp',
-        gpus=[0],
-        nb_sanity_val_steps=2
-    )
+    trainer = Trainer(gpus=1,
+                      train_percent_check=1.,
+                      val_percent_check=1.,
+                      val_check_interval=1.,
+                      logger=logger,
+                      checkpoint_callback=checkpoint_callback,
+                      fast_dev_run=False,
+                      early_stop_callback=False)
 
     # train model
+    convert_hparams_to_string(model)
     trainer.fit(model)
 
 if __name__ == '__main__':
-
-    # use default args given by lightning
-    root_dir = os.path.split(os.path.dirname(sys.modules['__main__'].__file__))[0]
-    parent_parser = HyperOptArgumentParser(strategy='random_search', add_help=False)
-    add_default_args(parent_parser, root_dir)
-
-    # allow model to overwrite or extend args
-    parser = ContrastivePredictiveSystem.add_model_specific_args(parent_parser, root_dir)
-    hyperparams = parser.parse_args()
+    hyperparams = get_args()
 
     # train model
     main(hyperparams)

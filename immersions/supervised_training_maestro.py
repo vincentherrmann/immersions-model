@@ -1,3 +1,4 @@
+from test_tube import HyperOptArgumentParser, Experiment
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning import Trainer
 from pytorch_lightning.logging import TensorBoardLogger
@@ -5,10 +6,10 @@ import os.path
 import sys
 import argparse
 
-from immersions.cpc_system import convert_hparams_to_string
-from immersions.cpc_system_maestro import ContrastivePredictiveSystemMaestro
+from immersions.supervised_system import SupervisedTaskSystem
+from immersions.cpc_system import ContrastivePredictiveSystem
 from immersions.classication_task import MaestroClassificationTaskModel
-
+from immersions.cpc_system import convert_hparams_to_string
 
 def get_args():
     parent_parser = argparse.ArgumentParser(add_help=False)
@@ -25,7 +26,7 @@ def get_args():
     parent_parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                                help='evaluate model on validation set')
 
-    parser = ContrastivePredictiveSystemMaestro.add_model_specific_args(parent_parser)
+    parser = ContrastivePredictiveSystem.add_model_specific_args(parent_parser)
     return parser.parse_args()
 
 def main(hparams, cluster=None, results_dict=None):
@@ -36,17 +37,16 @@ def main(hparams, cluster=None, results_dict=None):
     """
     # init experiment
 
-
-    name = "immersions_maestro_4_score_timesteps"
+    name = "maestro_supervised_5"
     logs_dir = "/home/vincent/Projects/Immersions/logs"
     checkpoint_dir = "/home/vincent/Projects/Immersions/checkpoints/" + name
     hparams.training_set_path = '/home/vincent/data/maestro-v2.0.0'
     hparams.validation_set_path = '/home/vincent/data/maestro-v2.0.0'
     hparams.test_task_set_path = '/home/vincent/data/maestro-v2.0.0'
     hparams.data_path = hparams.training_set_path
-    #hparams.training_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
-    #hparams.validation_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
-    #hparams.test_task_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    # hparams.training_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    # hparams.validation_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
+    # hparams.test_task_set_path = 'C:/Users/HEV7RNG/Documents/data/maestro-v2.0.0'
     hparams.dummy_datasets = False
     hparams.audio_noise = 3e-3
 
@@ -70,38 +70,33 @@ def main(hparams, cluster=None, results_dict=None):
     hparams.ar_kernel_sizes = (4, 4, 1, 4, 4, 1, 4, 1, 4)
     hparams.ar_pooling = (1, 1, 2, 1, 1, 2, 1, 1, 1)
     hparams.ar_self_attention = (False, False, False, False, False, False, False, False, False)
-    hparams.batch_size = 32
-    hparams.learning_rate = 3e-4
+    hparams.batch_size = 48
+    hparams.learning_rate = 1e-4
     hparams.warmup_steps = 1000
     hparams.annealing_steps = 100000
-    hparams.score_over_all_timesteps = True
+    hparams.score_over_all_timesteps = False
+    hparams.wasserstein_penalty = 0.00
     hparams.visible_steps = 64
     hparams.prediction_steps = 16
     hparams.prediction_gap = 4
 
+    # debug testing
+    #hparams.enc_batch_norm = False
+    #hparams.ar_batch_norm = False
+
     # build model
-    model = ContrastivePredictiveSystemMaestro(hparams)
-    model.activation_register.active = False
-
-    def create_task_model():
-        task_model = MaestroClassificationTaskModel(cpc_system=model,
-                                                    task_dataset_path=hparams.validation_set_path,
-                                                    feature_size=model.ar_model.ar_size,
-                                                    hidden_layers=0)
-        return task_model
-
-    model.get_test_task_model = create_task_model
+    model = SupervisedTaskSystem(hparams, dataset_path=hparams.test_task_set_path)
 
     logger = TensorBoardLogger(save_dir=logs_dir, name=name)
-    checkpoint_callback = ModelCheckpoint(filepath=checkpoint_dir, save_top_k=-1)
-
+    checkpoint_callback = ModelCheckpoint(filepath=checkpoint_dir, save_top_k=1)
     # configure trainer
     trainer = Trainer(gpus=1,
                       train_percent_check=1.,
-                      val_percent_check=0.5,
+                      val_percent_check=1.,
                       val_check_interval=0.25,
                       logger=logger,
                       checkpoint_callback=checkpoint_callback,
+                      fast_dev_run=False,
                       early_stop_callback=False)
 
     # train model

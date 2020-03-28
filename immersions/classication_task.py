@@ -3,28 +3,37 @@ import torch
 import random
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
-from torchvision.datasets import MNIST
-import torchvision.transforms as transforms
 
 import pytorch_lightning as pl
 from immersions.audio_dataset import AudioTestingDataset, MaestroTestingDataset
 
 
 class ClassificationTaskModel(pl.LightningModule):
-    def __init__(self, cpc_system, task_dataset_path, evaluation_ratio=0.2):
+    def __init__(self, cpc_system, task_dataset_path, feature_size, hidden_layers=1, evaluation_ratio=0.2):
         super(ClassificationTaskModel, self).__init__()
         # not the best model...
         self.__cpc_system = cpc_system,
         self.task_dataset_path = task_dataset_path
         self.audio_dataset = self._load_dataset()
+        self.feature_size = feature_size
 
         self.num_items = len(self.audio_dataset)
-        self.classifier_model = torch.nn.Sequential(
-            torch.nn.Linear(in_features=self.cpc_system.hparams.ar_channels[-1], out_features=128),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.5),
-            torch.nn.Linear(in_features=128, out_features=self.audio_dataset.num_classes)
-        )
+
+        if hidden_layers <= 0:
+            self.classifier_model = torch.nn.Linear(in_features=self.feature_size,
+                                                    out_features=self.audio_dataset.num_classes)
+        else:
+            modules = [torch.nn.Linear(in_features=self.feature_size, out_features=128)]
+            for _ in range(1, hidden_layers):
+                modules.append(torch.nn.ReLU())
+                modules.append(torch.nn.Dropout(0.5))
+                modules.append(torch.nn.Linear(in_features=128, out_features=128))
+
+            modules.append(torch.nn.ReLU())
+            modules.append(torch.nn.Dropout(0.5))
+            modules.append(torch.nn.Linear(in_features=128,
+                                           out_features=self.audio_dataset.num_classes))
+            self.classifier_model = torch.nn.Sequential(*modules)
 
         if torch.cuda.is_available():
             self.device = 'cuda:0'
@@ -46,8 +55,8 @@ class ClassificationTaskModel(pl.LightningModule):
 
     def calculate_data(self):
         # calculate data for test task
-        batch_size = self.cpc_system.hparams.batch_size
-        task_data = torch.FloatTensor(self.num_items, self.cpc_system.hparams.ar_channels[-1])
+        batch_size = self.cpc_system.batch_size
+        task_data = torch.FloatTensor(self.num_items, self.feature_size)
         task_labels = torch.LongTensor(self.num_items)
         task_data.needs_grad = False
         task_labels.needs_grad = False
@@ -58,11 +67,11 @@ class ClassificationTaskModel(pl.LightningModule):
                                                    shuffle=False)
         print("calculate test task data")
         for step, (batch, labels) in enumerate(iter(t_dataloader)):
-            # print("step", step)
+            #print("step", step)
             batch = batch.to(device=self.device).unsqueeze(1)
             # if self.preprocessing is not None:
             #     batch = self.preprocessing(batch)
-            predictions, targets, z, c = self.cpc_system(batch)
+            predictions, targets, z, c, scal = self.cpc_system(batch)
             c = c.view(batch.shape[0], -1, c.shape[1])
             c = c[:, 0, :]
             # z = self.model.encoder(batch.unsqueeze(1))
@@ -83,32 +92,35 @@ class ClassificationTaskModel(pl.LightningModule):
         # REQUIRED
         x, y = batch
         y_hat = self.forward(x)
-        return {'loss': F.cross_entropy(y_hat, y)}
+        loss = F.cross_entropy(y_hat, y)
+        return {'loss': loss,
+                'progress_bar': {'train_loss': loss}}
 
     def validation_step(self, batch, batch_nb):
         # OPTIONAL
         x, y = batch
         y_hat = self.forward(x)
+        y_hat = self.forward(x)
         accuracy = torch.mean((torch.argmax(y_hat, dim=1) == y).float())
-        return {'val_loss': F.cross_entropy(y_hat, y), 'val_accuracy': accuracy}
+        loss = F.cross_entropy(y_hat, y)
+        return {'val_loss': loss, 'val_accuracy': accuracy}
 
     def validation_end(self, outputs):
         # OPTIONAL
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         avg_acc = torch.stack([x['val_accuracy'] for x in outputs]).mean()
-        return {'avg_val_loss': avg_loss, 'avg_val_accuracy': avg_acc}
+        return {'val_loss': avg_loss, 'val_accuracy': avg_acc}
 
     def configure_optimizers(self):
         # REQUIRED
         return torch.optim.Adam(self.parameters(), lr=0.001)
 
-    @property
-    def tng_dataloader(self):
+    def train_dataloader(self):
         print("call task training data loader")
         dataset = torch.utils.data.Subset(self.encoding_dataset, self.training_indices)
         return torch.utils.data.DataLoader(dataset, batch_size=self.batch_size)
 
-    @property
+    @pl.data_loader
     def val_dataloader(self):
         print("call task validation data loader")
         dataset = torch.utils.data.Subset(self.encoding_dataset, self.validation_indices)

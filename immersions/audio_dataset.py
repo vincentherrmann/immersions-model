@@ -311,7 +311,6 @@ class MaestroTestingDataset(MaestroDataset):
         return len(self.composer_lookup)
 
 
-
 class FileBatchSampler(torch.utils.data.Sampler):
     def __init__(self, index_count_per_file, batch_size, file_batch_size=1, drop_last=True, seed=None):
         # [[]]

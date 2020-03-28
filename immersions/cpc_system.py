@@ -1,17 +1,16 @@
 import os
 from collections import OrderedDict
+import argparse
 import torch.nn as nn
-from torchvision.datasets import MNIST
-import torchvision.transforms as transforms
 import torch
 import torch.nn.functional as F
+from six import string_types
 from test_tube import HyperOptArgumentParser
 from torch import optim
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 import pytorch_lightning as pl
-from pytorch_lightning.root_module.root_module import LightningModule
 
 from immersions.model.preprocessing import PreprocessingModule
 from immersions.model.scalogram_encoder import ScalogramResidualEncoder
@@ -28,8 +27,8 @@ from immersions.input_optimization.activation_utilities import ActivationStatist
 import ast
 
 
-class ContrastivePredictiveSystem(LightningModule):
-    def __init__(self, hparams, load_datasets=True, test_task_model=None):
+class ContrastivePredictiveSystem(pl.LightningModule):
+    def __init__(self, hparams, load_datasets=True, get_test_task_model=None):
         """
         Pass in parsed HyperOptArgumentParser to the model
         :param hparams:
@@ -42,7 +41,7 @@ class ContrastivePredictiveSystem(LightningModule):
 
         self.batch_size = hparams.batch_size
         self.prediction_steps = self.hparams.prediction_steps
-        self.test_task_model = test_task_model
+        self.get_test_task_model = get_test_task_model
 
         # build model
         self.__build_model()
@@ -135,9 +134,10 @@ class ContrastivePredictiveSystem(LightningModule):
         """
 
         scal = self.preprocessing(x)
+        scal.requires_grad = True
         predicted_z, targets, z, c = self.model(scal)
 
-        return predicted_z, targets, z, c
+        return predicted_z, targets, z, c, scal
 
     def loss(self, scores):
         batch_size = scores.shape[0]
@@ -170,18 +170,18 @@ class ContrastivePredictiveSystem(LightningModule):
         self.eval()
 
         # forward pass
-        predicted_z, targets, _, _ = self.forward(batch)
+        predicted_z, targets, _, _, scal = self.forward(batch)
         scores = torch.tensordot(predicted_z, targets, dims=([2], [1]))  # data_batch, data_step, target_batch, target_step
         loss = self.loss(scores)
 
         if self.hparams.wasserstein_penalty != 0.:
             score_sum = torch.sum(scores)
-            batch_grad = torch.autograd.grad(outputs=score_sum,
-                                             inputs=batch,
+            scal_grad = torch.autograd.grad(outputs=score_sum,
+                                             inputs=scal,
                                              create_graph=True,
                                              retain_graph=True,
                                              only_inputs=True)
-            gradient_penalty = ((batch_grad[0].norm(2, dim=1) - 1) ** 2).mean()
+            gradient_penalty = ((scal_grad[0].norm(2, dim=1) - 1) ** 2).mean()
             loss += self.hparams.wasserstein_penalty * gradient_penalty
 
         # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
@@ -190,12 +190,13 @@ class ContrastivePredictiveSystem(LightningModule):
 
         output = OrderedDict({
             'loss': loss,
-            'prog': {'tng_loss': loss, 'lr': self.current_learning_rate}
+            'progress_bar': {'train_loss': loss},
+            'log': {'tng_loss': loss, 'lr': self.current_learning_rate}
         })
 
         return output
 
-    def optimizer_step(self, current_epoch, batch_nb, optimizer, optimizer_i):
+    def optimizer_step(self, current_epoch, batch_nb, optimizer, optimizer_i, second_order_closure=None):
         lr_scale = self.lr_scheduler.lr_lambda(self.global_step)
         for pg in optimizer.param_groups:
             self.current_learning_rate = lr_scale * self.hparams.learning_rate
@@ -218,20 +219,23 @@ class ContrastivePredictiveSystem(LightningModule):
         #batch[:, :, -1] = float('inf')
 
         # forward pass
-        predicted_z, targets, _, _ = self.forward(batch)
+        predicted_z, targets, _, _, scal = self.forward(batch)
         # predicted_z: batch, step, features
         # targets: batch, features, step
         scores = torch.tensordot(predicted_z, targets, dims=([2], [1]))  # data_batch, data_step, target_batch, target_step
         loss = self.loss(scores)  # valid scores: batch, time_step
 
-        if self.hparams.wasserstein_penalty != 0.:
+        if False: #self.hparams.wasserstein_penalty != 0.:
             score_sum = torch.sum(scores)
-            batch_grad = torch.autograd.grad(outputs=score_sum,
-                                             inputs=batch,
+            score_sum.requires_grad = True
+            scal.requires_grad = True
+            scal_grad = torch.autograd.grad(outputs=score_sum,
+                                             inputs=scal,
                                              create_graph=True,
                                              retain_graph=True,
-                                             only_inputs=True)
-            gradient_penalty = ((batch_grad[0].norm(2, dim=1) - 1) ** 2).mean()
+                                             only_inputs=True,
+                                             allow_unused=True)
+            gradient_penalty = ((scal_grad[0].norm(2, dim=1) - 1) ** 2).mean()
             loss += self.hparams.wasserstein_penalty * gradient_penalty
 
         # calculate prediction accuracy as the proportion of scores that are highest for the correct target
@@ -292,25 +296,33 @@ class ContrastivePredictiveSystem(LightningModule):
         val_acc_mean /= len(outputs)
 
         test_task_dict = {}
-        if self.test_task_model is not None:
-            self.test_task_model.calculate_data()
+        if self.get_test_task_model is not None:
+            test_task_model = self.get_test_task_model()
+            test_task_model.calculate_data()
 
-            if not self.experiment.debug:
-                self.experiment.add_embedding(self.test_task_model.task_data,
-                                              metadata=self.test_task_model.task_labels,
-                                              global_step=self.global_step)
-            if torch.cuda.is_available():
-                trainer = pl.Trainer(max_nb_epochs=20,
-                                     gpus=[0])
-            else:
-                trainer = pl.Trainer(max_nb_epochs=20)
-            trainer.fit(self.test_task_model)
+            # if not self.experiment.debug:
+            #     self.experiment.add_embedding(self.test_task_model.task_data,
+            #                                   metadata=self.test_task_model.task_labels,
+            #                                   global_step=self.global_step)
 
-            test_task_dict['val_task_acc'] = trainer.tng_tqdm_dic['avg_val_accuracy']
-            test_task_dict['val_task_loss'] = trainer.tng_tqdm_dic['avg_val_loss']
+            trainer = pl.Trainer(logger=False,
+                                 checkpoint_callback=False,
+                                 max_epochs=100)
+            trainer.fit(test_task_model)
+
+            test_task_dict['val_task_acc'] = trainer.callback_metrics['val_accuracy']
+            test_task_dict['val_task_loss'] = trainer.callback_metrics['val_loss']
 
         tqdm_dic = {'val_loss': val_loss_mean, 'val_acc': val_acc_mean}
-        return {**tqdm_dic, **test_task_dict}
+        result = {
+            "progress_bar": tqdm_dic,
+            "log": {"val_loss": val_loss,
+                    "val_acc": val_acc_mean,
+                    "val_task_acc": trainer.callback_metrics['val_accuracy'],
+                    "val_task_loss": trainer.callback_metrics['val_loss']},
+            "val_loss": val_loss_mean
+        }
+        return result
 
     # ---------------------
     # TRAINING SETUP
@@ -384,8 +396,8 @@ class ContrastivePredictiveSystem(LightningModule):
 
         return result_dict
 
-    @property
-    def tng_dataloader(self):
+    #@pl.data_loader
+    def train_dataloader(self):
         print('tng data loader called')
         # loader = DataLoader(
         #     dataset=self.training_set,
@@ -434,14 +446,8 @@ class ContrastivePredictiveSystem(LightningModule):
         return None
 
     @staticmethod
-    def add_model_specific_args(parent_parser, root_dir):  # pragma: no cover
-        """
-        Parameters you define here will be available to your model through self.hparams
-        :param parent_parser:
-        :param root_dir:
-        :return:
-        """
-        parser = HyperOptArgumentParser(strategy=parent_parser.strategy, parents=[parent_parser])
+    def add_model_specific_args(parent_parser):
+        parser = argparse.ArgumentParser(parents=[parent_parser])
 
         parser.add_argument('--log_dir', default='logs', type=str)
         parser.add_argument('--checkpoint_dir', default='checkpoints', type=str)
@@ -466,8 +472,8 @@ class ContrastivePredictiveSystem(LightningModule):
         parser.add_argument('--audio_noise', default=0., type=float)
 
         # training
-        parser.opt_list('--optimizer_name', default='adam', type=str, options=['adam'], tunable=False)
-        parser.opt_list('--learning_rate', default=0.0001, type=float, options=[0.0001, 0.0005, 0.001], tunable=True)
+        parser.add_argument('--optimizer_name', default='adam', type=str)
+        parser.add_argument('--learning_rate', default=0.0001, type=float)
         parser.add_argument('--batch_size', default=32, type=int)
         parser.add_argument('--score_over_all_timesteps', default=True, type=bool)
         parser.add_argument('--visible_steps', default=60, type=int)
@@ -517,6 +523,19 @@ class ContrastivePredictiveSystem(LightningModule):
         parser.add_argument('--ar_bias', default=True, type=bool)
 
         return parser
+
+def convert_hparams_to_string(model):
+    for k, v in vars(model.hparams).items():
+        if isinstance(v, int) or isinstance(v, float):
+            continue
+        if isinstance(v, string_types):
+            continue
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, torch.Tensor):
+            continue
+        setattr(model.hparams, k, str(v))
+
 
 
 def decode_hparams_strings(hparams):
